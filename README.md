@@ -193,6 +193,10 @@ Requires Python 3 (tick "Add to PATH" when installing it) and, for one-click log
 
 Only your own account can read them. Nothing is sent anywhere except to intra.epitech.eu.
 
+If the `EPITECH_TOKEN` environment variable is set, epiplan uses it instead of logging in. Avoid it on shared
+machines: environment variables can be seen by other programs you run, and end up in shell history or dotfiles.
+The normal login keeps the token in a file only you can read.
+
 ## Requirements
 
 Python 3, and (for one-click login) Google Chrome. Works on Linux, macOS and Windows. The installer

@@ -201,6 +201,11 @@ Nécessite Python 3 (coche « Add to PATH » à son installation) et, pour la co
 
 Seul ton compte peut les lire. Rien n'est envoyé ailleurs qu'à intra.epitech.eu.
 
+Si la variable d'environnement `EPITECH_TOKEN` est définie, epiplan l'utilise au lieu de se connecter. Évite-la
+sur une machine partagée : les variables d'environnement sont visibles par les autres programmes que tu lances, et
+finissent dans l'historique du shell ou les dotfiles. La connexion normale garde le jeton dans un fichier que toi
+seul peux lire.
+
 ## Prérequis
 
 Python 3, et (pour la connexion en un clic) Google Chrome. Fonctionne sous Linux, macOS et Windows.

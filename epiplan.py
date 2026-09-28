@@ -455,11 +455,16 @@ def load_json(path, default):
 def save_json(path, data, private=False):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    if private:
-        os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(tmp)  # a leftover .tmp would keep its old, possibly wider, permissions
+    try:
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600 if private else 0o666), "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(tmp)
+        raise
 
 
 def load_config():
@@ -669,8 +674,15 @@ def can_open_window():
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
+def is_intra_url(url):
+    parsed = urllib.parse.urlsplit(url)
+    return parsed.scheme == "https" and parsed.netloc == urllib.parse.urlsplit(INTRA).netloc
+
+
 def open_in_browser(url):
-    """Open a URL in the default browser, on any OS. Never raises if no opener is available."""
+    """Open an intra URL in the default browser, on any OS. Never raises if no opener is available."""
+    if not is_intra_url(url):
+        return
     try:
         if IS_WINDOWS:
             os.startfile(url)  # noqa: only defined on Windows
@@ -2008,6 +2020,11 @@ def run_notify():
 WINDOWS_TASK = "epiplan-notify"
 
 
+def systemd_quote(arg):
+    """Quote one ExecStart argument so paths with spaces, quotes or % stay a single argument."""
+    return '"' + arg.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
+
+
 def set_notifications(on):
     if IS_WINDOWS:
         set_notifications_windows(on)
@@ -2028,7 +2045,7 @@ def set_notifications(on):
     os.makedirs(SYSTEMD_DIR, exist_ok=True)
     with open(service, "w") as f:
         f.write("[Unit]\nDescription=epiplan reminders\n\n[Service]\nType=oneshot\n"
-                f"ExecStart={sys.executable} {os.path.abspath(__file__)} notify\n")
+                f"ExecStart={systemd_quote(sys.executable)} {systemd_quote(os.path.abspath(__file__))} notify\n")
     with open(timer, "w") as f:
         f.write("[Unit]\nDescription=epiplan reminder check every minute\n\n"
                 "[Timer]\nOnCalendar=*-*-* *:*:00\nAccuracySec=5s\n\n[Install]\nWantedBy=timers.target\n")
