@@ -23,12 +23,11 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 The installer sets everything up on your computer, asks you to pick a language and (optionally) a
 daily break to keep free, and prints where this guide lives afterwards. Then open a **new terminal**
-so the `epiplan` command is on your `PATH`. On Linux/macOS, if it warns that `~/.local/bin` isn't on
-your `PATH`, add this to your `~/.bashrc` (or `~/.zshrc`):
+so the `epiplan` command is found. On Linux/macOS the installer adds `~/.local/bin` to your `PATH`
+itself (in `~/.bashrc`, `~/.zshrc` or fish's config) and offers to log you in right away.
 
-```
-export PATH="$HOME/.local/bin:$PATH"
-```
+**`epiplan: command not found`?** You're still in the terminal you installed from: open a new one, or
+run `exec $SHELL`. `~/.local/bin/epiplan login` also works from anywhere.
 
 ## First run
 

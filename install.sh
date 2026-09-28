@@ -88,13 +88,37 @@ PY
 README="$APP/README.md"
 [ "$LANG_CHOICE" = "fr" ] && [ -f "$APP/README.fr.md" ] && README="$APP/README.fr.md"
 
-say "Done!"
+# ~/.local/bin is often not on PATH (Ubuntu only adds it if it existed when you logged in), which
+# makes 'epiplan' "command not found" - so add it to the shell's startup file ourselves.
+add_to_path() {
+    local rc="$1" line="$2"
+    mkdir -p "$(dirname "$rc")"
+    if ! grep -qsF "$line" "$rc"; then
+        printf '\n# added by the epiplan installer\n%s\n' "$line" >> "$rc"
+        echo "  added $BIN to your PATH in $rc"
+    fi
+}
+
+NEEDS_NEW_TERMINAL=0
 case ":$PATH:" in
     *":$BIN:"*) ;;
-    *) echo "NOTE: $BIN is not in your PATH. Add this line to your ~/.bashrc or ~/.zshrc:"
-       echo "      export PATH=\"\$HOME/.local/bin:\$PATH\""
-       echo "      then open a new terminal (or run it once now).";;
+    *) NEEDS_NEW_TERMINAL=1
+       say "Adding $BIN to your PATH"
+       EXPORT='export PATH="$HOME/.local/bin:$PATH"'
+       case "$(basename "${SHELL:-bash}")" in
+           zsh)  add_to_path "$HOME/.zshrc" "$EXPORT" ;;
+           fish) add_to_path "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/epiplan.fish" 'fish_add_path -g $HOME/.local/bin' ;;
+           *)    add_to_path "$HOME/.bashrc" "$EXPORT" ;;
+       esac
+       # $SHELL can say bash while the terminal actually opens zsh (or the reverse): cover both.
+       if [ -f "$HOME/.zshrc" ]; then add_to_path "$HOME/.zshrc" "$EXPORT"; fi
+       if [ -f "$HOME/.bashrc" ]; then add_to_path "$HOME/.bashrc" "$EXPORT"; fi
+       if [ "$(uname)" = "Darwin" ] && [ -f "$HOME/.bash_profile" ]; then
+           add_to_path "$HOME/.bash_profile" "$EXPORT"
+       fi ;;
 esac
+
+say "Done!"
 echo
 echo "The guide (README) is here:"
 echo "    $README"
@@ -107,3 +131,16 @@ if [ "$(uname)" = "Linux" ]; then
 fi
 echo
 echo "Switch language any time with:  epiplan lang en   |   epiplan lang fr"
+
+if [ "$NEEDS_NEW_TERMINAL" = 1 ]; then
+    echo
+    echo "IMPORTANT: 'epiplan' works in NEW terminals. In this one, either run:  exec \$SHELL"
+    echo "           or use the full path:  $BIN/epiplan login"
+fi
+
+printf "\nLog in to the intra now? [Y/n]: "
+read -r answer </dev/tty || answer=n
+case "$answer" in
+    [nN]*) ;;
+    *) "$BIN/epiplan" login || echo "Login did not finish - run it later with: epiplan login" ;;
+esac
