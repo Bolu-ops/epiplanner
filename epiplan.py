@@ -457,6 +457,7 @@ def load_json(path, default):
 def save_json(path, data):
     """Write JSON atomically, readable by you only - it holds your token, grades and notes."""
     os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    os.chmod(os.path.dirname(path), 0o700)  # folders made by older versions were readable by everyone
     tmp = path + ".tmp"
     with contextlib.suppress(FileNotFoundError):
         os.remove(tmp)  # a leftover .tmp would keep its old, possibly wider, permissions
@@ -1711,6 +1712,8 @@ def find_local_repo(project, config):
     return None
 
 
+CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
 GITHUB_SLUG = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
@@ -1767,6 +1770,7 @@ def analyze_repo(path):
             continue
         text = re.sub(r"^[\s/*#;>-]+", "", text)
         text = re.sub(r"\b(TODO|FIXME)\b[:\s-]*", "", text, count=1).strip()
+        text = CONTROL_CHARS.sub("", text)  # a repo could hide terminal escape sequences in a TODO
         if not text or len(text) > 100 or (len(text) > 24 and " " not in text):  # skip base64/minified noise
             continue
         todos.append((fpath, text))
