@@ -128,6 +128,8 @@ FR = {
     "could not log in automatically - run: epiplan login":
         "connexion automatique impossible - lance : epiplan login",
     "intra refused the token": "l'intra a refusé le jeton",
+    "intra redirected away (not logged in)": "l'intra a redirigé ailleurs (pas connecté)",
+    "not a folder or an owner/repo GitHub slug: {repo}": "ni un dossier ni un slug GitHub owner/repo : {repo}",
     "intra answered HTTP {code}": "l'intra a répondu HTTP {code}",
     "cannot reach intra: {reason}": "impossible de joindre l'intra : {reason}",
     "intra did not return JSON (not logged in)": "l'intra n'a pas renvoyé de JSON (non connecté)",
@@ -452,13 +454,14 @@ def load_json(path, default):
         return default
 
 
-def save_json(path, data, private=False):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+def save_json(path, data):
+    """Write JSON atomically, readable by you only - it holds your token, grades and notes."""
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     tmp = path + ".tmp"
     with contextlib.suppress(FileNotFoundError):
         os.remove(tmp)  # a leftover .tmp would keep its old, possibly wider, permissions
     try:
-        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600 if private else 0o666), "w") as f:
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         os.replace(tmp, path)
     except BaseException:
@@ -472,7 +475,7 @@ def load_config():
 
 
 def save_config(config):
-    save_json(CONFIG_FILE, config, private=True)
+    save_json(CONFIG_FILE, config)
 
 
 def load_data():
@@ -501,7 +504,7 @@ def acquire_lock(handle):
 def changing_data():
     """Load, change and save the planner under a lock, so the open planner and the
     background reminder job never overwrite each other's changes."""
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
     with open(LOCK_FILE, "w") as lock:
         acquire_lock(lock)
         data = load_data()
@@ -719,6 +722,18 @@ def get_token(config, allow_window):
     return refresh_token(config, allow_window)
 
 
+class IntraRedirectsOnly(urllib.request.HTTPRedirectHandler):
+    """urllib copies the Cookie header onto every redirect, whatever the host; only follow redirects
+    that stay on the intra so the login cookie is never sent anywhere else."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not is_intra_url(newurl):
+            raise AuthError(_("intra redirected away (not logged in)"))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+INTRA_OPENER = urllib.request.build_opener(IntraRedirectsOnly)
+
+
 def intra_get(token, path, params):
     params = dict(params, format="json")
     url = f"{INTRA}{path}?{urllib.parse.urlencode(params)}"
@@ -728,7 +743,7 @@ def intra_get(token, path, params):
         "Accept": "application/json",
     })
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with INTRA_OPENER.open(request, timeout=30) as response:
             body = response.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as err:
         if err.code in (401, 403):
@@ -1632,19 +1647,38 @@ GIT_ENV = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="true",
                GIT_SSH_COMMAND="ssh -oBatchMode=yes -oStrictHostKeyChecking=accept-new")
 
 
+# A repo's own .git/config can make git run commands (core.fsmonitor, hooks, credential helpers,
+# ext:: remotes...), and epiplan runs git in folders it finds by itself, e.g. in ~/Downloads. So
+# git only ever runs in repos whose local config holds nothing but these everyday settings.
+PLAIN_REPO_CONFIG = re.compile(
+    r"(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)"
+    r"|remote\.[^\n]+\.(url|pushurl|fetch|prune|tagopt)|branch\.[^\n]+\.[a-z-]+"
+    r"|user\.(name|email)|pull\.(rebase|ff)|push\.default|fetch\.prune|init\.defaultbranch)")
+
+GIT_SAFE_OPTIONS = ["-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}",
+                    "-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
+                    "-c", "protocol.ssh.allow=always"]
+
+
 def run_git(path, *args, timeout=30):
     """Run a git command non-interactively (never prompts, so it can't hang the app)."""
     try:
-        result = subprocess.run(["git", "-C", path, *args], capture_output=True, text=True,
-                                timeout=timeout, env=GIT_ENV)
+        result = subprocess.run(["git", *GIT_SAFE_OPTIONS, "-C", path, *args], capture_output=True,
+                                text=True, timeout=timeout, env=GIT_ENV)
         return result.stdout.strip() if result.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
 
 
+def has_plain_config(path):
+    keys = run_git(path, "config", "--local", "--list", "--name-only").splitlines()
+    return all(PLAIN_REPO_CONFIG.fullmatch(key) for key in keys)
+
+
 def is_git_repo(path):
+    """A git repo that is safe to run git in (see PLAIN_REPO_CONFIG)."""
     return bool(path) and os.path.isdir(path) and \
-        (os.path.isdir(os.path.join(path, ".git")) or run_git(path, "rev-parse", "--is-inside-work-tree") == "true")
+        run_git(path, "rev-parse", "--is-inside-work-tree") == "true" and has_plain_config(path)
 
 
 def _norm(text):
@@ -1677,6 +1711,13 @@ def find_local_repo(project, config):
     return None
 
 
+GITHUB_SLUG = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+
+def is_github_slug(repo):
+    return bool(GITHUB_SLUG.fullmatch(repo)) and not repo.startswith(("-", ".")) and ".." not in repo
+
+
 def clone_repo(slug, dest):
     for command in (["gh", "repo", "clone", slug, dest],
                     ["git", "clone", "--quiet", f"git@github.com:{slug}.git", dest],
@@ -1695,7 +1736,7 @@ def repo_checkout(repo):
         return None
     if os.path.isdir(repo):
         return repo
-    if "/" in repo and not os.path.isabs(repo):  # owner/name GitHub slug
+    if is_github_slug(repo):
         dest = os.path.join(REPO_CACHE, repo.replace("/", "_"))
         if is_git_repo(dest):
             run_git(dest, "pull", "--quiet")
@@ -2821,6 +2862,8 @@ def cmd_repo(query, repo):
         match = next((p for p in project_deadlines(data) if query.lower() in project_name_of(p).lower()), None)
         if not match:
             sys.exit(_("no project matches \"{query}\"").format(query=query))
+        if not os.path.isdir(repo) and not is_github_slug(repo):
+            sys.exit(_("not a folder or an owner/repo GitHub slug: {repo}").format(repo=repo))
         stored = os.path.abspath(repo) if os.path.isdir(repo) else repo
         data["work"].setdefault(match["id"], {"logged": {}})["repo"] = stored
     print(_("linked {name} to {repo}").format(name=project_name_of(match), repo=stored))
